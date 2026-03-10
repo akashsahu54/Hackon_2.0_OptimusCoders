@@ -1,12 +1,25 @@
 import { useNavigate } from 'react-router-dom';
 import StatusBadge from './StatusBadge';
-import { TYPE_ICONS } from '../utils/constants';
-import { formatDate, formatCurrency, timeAgo } from '../utils/formatters';
+import { formatCurrency, timeAgo } from '../utils/formatters';
+import { FileText, Receipt, CreditCard, Landmark, ClipboardList, Heart, Package, Zap, Paperclip } from 'lucide-react';
+
+const TYPE_ICONS = {
+    invoice: Receipt,
+    receipt: Receipt,
+    contract: FileText,
+    id_document: CreditCard,
+    bank_statement: Landmark,
+    tax_form: ClipboardList,
+    medical_form: Heart,
+    purchase_order: Package,
+    utility_bill: Zap,
+    other: Paperclip,
+};
 
 export default function DocumentCard({ document }) {
     const navigate = useNavigate();
     const fields = document.extracted_fields || {};
-    const icon = TYPE_ICONS[document.document_type] || '📎';
+    const Icon = TYPE_ICONS[document.document_type] || FileText;
 
     return (
         <div
@@ -15,7 +28,9 @@ export default function DocumentCard({ document }) {
         >
             <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
-                    <span className="text-2xl">{icon}</span>
+                    <div className="w-9 h-9 rounded-xl bg-primary-600/15 flex items-center justify-center">
+                        <Icon className="w-4 h-4 text-primary-400" />
+                    </div>
                     <div>
                         <h3 className="text-sm font-semibold text-white group-hover:text-primary-300 transition-colors truncate max-w-[200px]">
                             {document.original_filename}
@@ -43,16 +58,22 @@ export default function DocumentCard({ document }) {
                             <p className="text-xs text-emerald-400 font-medium">{formatCurrency(fields.total_amount)}</p>
                         </div>
                     )}
-                    {fields.invoice_date && (
-                        <div>
-                            <p className="text-[10px] uppercase text-slate-600 tracking-wider">Date</p>
-                            <p className="text-xs text-slate-300">{formatDate(fields.invoice_date)}</p>
-                        </div>
-                    )}
                     {document.extraction_confidence != null && (
-                        <div>
-                            <p className="text-[10px] uppercase text-slate-600 tracking-wider">Confidence</p>
-                            <p className="text-xs text-slate-300">{(document.extraction_confidence * 100).toFixed(0)}%</p>
+                        <div className="col-span-2">
+                            <p className="text-[10px] uppercase text-slate-600 tracking-wider mb-1">Confidence</p>
+                            <div className="flex items-center gap-2">
+                                <div className="confidence-bar flex-1">
+                                    <div
+                                        className={`confidence-bar-fill ${
+                                            document.extraction_confidence >= 0.9 ? 'confidence-high' :
+                                            document.extraction_confidence >= 0.7 ? 'confidence-medium' :
+                                            'confidence-low'
+                                        }`}
+                                        style={{ width: `${document.extraction_confidence * 100}%` }}
+                                    />
+                                </div>
+                                <span className="text-[11px] text-slate-400">{(document.extraction_confidence * 100).toFixed(0)}%</span>
+                            </div>
                         </div>
                     )}
                 </div>
@@ -62,9 +83,7 @@ export default function DocumentCard({ document }) {
             {document.tags?.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-3">
                     {document.tags.slice(0, 3).map((tag) => (
-                        <span key={tag} className="px-2 py-0.5 text-[10px] rounded-full bg-primary-600/15 text-primary-400">
-                            #{tag}
-                        </span>
+                        <span key={tag} className="tag">#{tag}</span>
                     ))}
                 </div>
             )}

@@ -1,9 +1,10 @@
 import { useCallback, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useUploadDocument } from '../hooks/useDocuments';
+import { Upload, FileText, CheckCircle2, AlertCircle, Image } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-export default function UploadDropzone() {
+export default function UploadDropzone({ compact = false }) {
     const upload = useUploadDocument();
     const [uploadProgress, setUploadProgress] = useState(null);
 
@@ -20,7 +21,7 @@ export default function UploadDropzone() {
                         },
                     },
                     {
-                        onSuccess: (data) => {
+                        onSuccess: () => {
                             toast.success(`Uploaded: ${file.name}`);
                             setUploadProgress(null);
                         },
@@ -49,27 +50,31 @@ export default function UploadDropzone() {
     return (
         <div
             {...getRootProps()}
-            className={`dropzone ${isDragActive ? 'active' : ''}`}
+            className={`dropzone ${isDragActive ? 'active' : ''} ${compact ? 'py-8' : ''}`}
         >
             <input {...getInputProps()} />
 
             {uploadProgress !== null ? (
                 <div className="space-y-3">
                     <div className="w-12 h-12 mx-auto rounded-full bg-primary-600/20 flex items-center justify-center animate-pulse-soft">
-                        <span className="text-xl">⬆️</span>
+                        <Upload className="w-5 h-5 text-primary-400" />
                     </div>
                     <p className="text-sm text-slate-300">Uploading... {uploadProgress}%</p>
                     <div className="w-48 mx-auto h-1.5 bg-surface-700 rounded-full overflow-hidden">
                         <div
-                            className="h-full bg-primary-500 rounded-full transition-all duration-300"
+                            className="h-full bg-gradient-to-r from-primary-600 to-primary-400 rounded-full transition-all duration-300"
                             style={{ width: `${uploadProgress}%` }}
                         />
                     </div>
                 </div>
             ) : (
                 <div className="space-y-3">
-                    <div className="w-16 h-16 mx-auto rounded-2xl bg-primary-600/10 flex items-center justify-center">
-                        <span className="text-3xl">📤</span>
+                    <div className={`w-14 h-14 mx-auto rounded-2xl flex items-center justify-center transition-all duration-300 ${
+                        isDragActive
+                            ? 'bg-primary-500/20 scale-110'
+                            : 'bg-primary-600/10'
+                    }`}>
+                        <Upload className={`w-6 h-6 transition-colors ${isDragActive ? 'text-primary-400' : 'text-primary-500/60'}`} />
                     </div>
                     <div>
                         <p className="text-sm font-medium text-slate-200">

@@ -1,0 +1,376 @@
+# 🏗️ System Architecture: AI-Based Personalized Learning Platform
+
+> Designed for an **8-hour hackathon** — optimized for speed, simplicity, and impact.
+
+---
+
+## 1. High-Level Architecture
+
+```mermaid
+graph TB
+    subgraph Client["🖥️ Frontend (React + Vite)"]
+        LP["Landing Page"]
+        SD["Student Dashboard"]
+        QE["Quiz Engine"]
+        PA["Performance Analytics"]
+        TD["Teacher Dashboard"]
+        LB["Leaderboard"]
+    end
+
+    subgraph Server["⚙️ Backend (Node.js + Express)"]
+        AUTH["Auth Controller"]
+        STUDENT["Student Controller"]
+        QUIZ["Quiz Controller"]
+        AI["AI Engine Controller"]
+        TEACHER["Teacher Controller"]
+        GAMIFY["Gamification Controller"]
+    end
+
+    subgraph AI_Layer["🤖 AI Recommendation Engine"]
+        RULES["Rule-Based Scorer"]
+        LLM["Gemini API"]
+        ADAPT["Adaptive Difficulty"]
+    end
+
+    subgraph DB["🗄️ MongoDB"]
+        USERS["users"]
+        QUIZZES["quizzes"]
+        ATTEMPTS["quiz_attempts"]
+        PROGRESS["student_progress"]
+        BADGES["badges"]
+    end
+
+    Client -->|REST API| Server
+    Server --> AI_Layer
+    Server --> DB
+    AI_Layer -->|Generate Tips| LLM
+```
+
+---
+
+## 2. Architecture Decision Records (ADRs)
+
+### ADR-1: Monolith over Microservices
+| | |
+|---|---|
+| **Decision** | Single monolith (Express API + React SPA) |
+| **Alternatives** | Microservices, Next.js full-stack |
+| **Rationale** | 8-hour timeline, likely solo/small team, no scaling needs yet |
+| **Trade-off** | Can't scale independently — acceptable for hackathon |
+
+### ADR-2: MongoDB over PostgreSQL
+| | |
+|---|---|
+| **Decision** | MongoDB (NoSQL) |
+| **Alternatives** | PostgreSQL, SQLite |
+| **Rationale** | Flexible schema = iterate fast; quiz/progress data is document-shaped |
+| **Trade-off** | No ACID transactions — acceptable for this use case |
+
+### ADR-3: Rule-Based + LLM Hybrid over Pure ML
+| | |
+|---|---|
+| **Decision** | Score-based rules for difficulty + Gemini API for content |
+| **Alternatives** | Pure ML model, Pure LLM |
+| **Rationale** | No training data available; rules are deterministic and fast; LLM handles creative content |
+| **Trade-off** | Less "intelligent" than full ML — but ships in 8 hours |
+
+### ADR-4: JWT Auth over OAuth/Session
+| | |
+|---|---|
+| **Decision** | Simple JWT authentication |
+| **Alternatives** | OAuth 2.0, Session-based |
+| **Rationale** | Fastest to implement; no third-party login needed for MVP |
+| **Trade-off** | No social login — can add later |
+
+---
+
+## 3. Component Architecture
+
+### 3.1 Frontend (React + Vite + Tailwind CSS)
+
+```
+src/
+├── components/
+│   ├── common/          # Button, Card, Modal, Navbar
+│   ├── auth/            # Login, Register forms
+│   ├── quiz/            # QuizCard, QuizPlayer, Timer
+│   ├── dashboard/       # ProgressChart, StatsCard
+│   └── leaderboard/     # LeaderboardTable, BadgeDisplay
+├── pages/
+│   ├── Landing.jsx
+│   ├── Login.jsx
+│   ├── Register.jsx
+│   ├── StudentDashboard.jsx
+│   ├── QuizPage.jsx
+│   ├── Analytics.jsx
+│   ├── TeacherDashboard.jsx
+│   └── Leaderboard.jsx
+├── context/
+│   └── AuthContext.jsx   # JWT token management
+├── services/
+│   └── api.js            # Axios API client
+├── utils/
+│   └── helpers.js
+├── App.jsx
+└── main.jsx
+```
+
+**Key Libraries:**
+- `react-router-dom` — Routing
+- `recharts` — Charts for analytics
+- `axios` — HTTP client
+- `react-hot-toast` — Notifications
+
+---
+
+### 3.2 Backend (Node.js + Express)
+
+```
+server/
+├── config/
+│   └── db.js              # MongoDB connection
+├── middleware/
+│   ├── auth.js            # JWT verification
+│   └── roleCheck.js       # Student vs Teacher guard
+├── models/
+│   ├── User.js            # name, email, password, role, points
+│   ├── Quiz.js            # title, subject, questions[], difficulty
+│   ├── QuizAttempt.js     # userId, quizId, answers[], score, timestamp
+│   ├── Progress.js        # userId, subject, topicScores{}, level
+│   └── Badge.js           # name, criteria, icon
+├── controllers/
+│   ├── authController.js
+│   ├── quizController.js
+│   ├── studentController.js
+│   ├── aiController.js     # AI recommendation logic
+│   ├── teacherController.js
+│   └── gamificationController.js
+├── routes/
+│   ├── auth.js
+│   ├── quiz.js
+│   ├── student.js
+│   ├── ai.js
+│   ├── teacher.js
+│   └── gamification.js
+├── services/
+│   ├── aiEngine.js         # Rule-based + Gemini integration
+│   └── scoringEngine.js    # Points/badge calculation
+├── server.js
+└── .env
+```
+
+---
+
+### 3.3 AI Recommendation Engine
+
+```mermaid
+flowchart LR
+    A["Student takes Quiz"] --> B["Score Recorded"]
+    B --> C{"Score Analysis"}
+    C -->|"Score < 40%"| D["Recommend: EASIER topics\n+ Revision material"]
+    C -->|"40-70%"| E["Recommend: SAME level\n+ Practice quizzes"]
+    C -->|"Score > 70%"| F["Recommend: HARDER topics\n+ Advanced material"]
+    D --> G["Gemini API generates\npersonalized study tips"]
+    E --> G
+    F --> G
+    G --> H["Show on Dashboard"]
+```
+
+**Algorithm (Rule-Based Core):**
+```
+Input: student.topicScores, quiz.subject, quiz.score
+
+1. Calculate topic_mastery = avg(last 3 scores for topic)
+2. IF topic_mastery < 40% → set difficulty = "easy", flag = "weak"
+3. IF topic_mastery 40-70% → set difficulty = "medium", flag = "improving"
+4. IF topic_mastery > 70% → set difficulty = "hard", flag = "strong"
+5. Find quizzes WHERE subject = topic AND difficulty = next_level
+6. Call Gemini API: "Generate 3 study tips for a student
+   scoring {score}% in {topic}. Keep tips actionable."
+7. Return { recommended_quizzes, study_tips, weak_areas, strong_areas }
+```
+
+---
+
+## 4. Database Schema
+
+```mermaid
+erDiagram
+    USERS {
+        ObjectId _id
+        String name
+        String email
+        String password
+        String role "student | teacher"
+        Number points
+        Array badges
+        Date createdAt
+    }
+
+    QUIZZES {
+        ObjectId _id
+        String title
+        String subject
+        String topic
+        String difficulty "easy | medium | hard"
+        Array questions "{ question, options[], correctAnswer }"
+        ObjectId createdBy
+        Date createdAt
+    }
+
+    QUIZ_ATTEMPTS {
+        ObjectId _id
+        ObjectId userId
+        ObjectId quizId
+        Array answers
+        Number score
+        Number timeTaken
+        Date completedAt
+    }
+
+    STUDENT_PROGRESS {
+        ObjectId _id
+        ObjectId userId
+        String subject
+        Object topicScores "{ topicName: avgScore }"
+        String currentLevel "beginner | intermediate | advanced"
+        Array recommendations
+        Date updatedAt
+    }
+
+    BADGES {
+        ObjectId _id
+        String name
+        String description
+        String icon
+        String criteria "e.g. score_100, streak_7"
+    }
+
+    USERS ||--o{ QUIZ_ATTEMPTS : takes
+    USERS ||--o{ STUDENT_PROGRESS : has
+    USERS ||--o{ BADGES : earns
+    QUIZZES ||--o{ QUIZ_ATTEMPTS : attempted_in
+```
+
+---
+
+## 5. API Design
+
+### Auth APIs
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/auth/register` | Register student/teacher |
+| POST | `/api/auth/login` | Login → returns JWT |
+| GET | `/api/auth/me` | Get current user profile |
+
+### Quiz APIs
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/quizzes` | List quizzes (filter by subject, difficulty) |
+| GET | `/api/quizzes/:id` | Get quiz details with questions |
+| POST | `/api/quizzes` | Create quiz (teacher only) |
+| POST | `/api/quizzes/:id/submit` | Submit quiz answers → get score |
+
+### AI / Recommendation APIs
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/ai/recommendations` | Get personalized recommendations for student |
+| GET | `/api/ai/study-tips/:subject` | Get AI-generated study tips |
+
+### Student APIs
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/student/progress` | Get student's progress across subjects |
+| GET | `/api/student/analytics` | Get strengths/weaknesses analysis |
+| GET | `/api/student/history` | Get quiz attempt history |
+
+### Teacher APIs
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/teacher/students` | List all students |
+| GET | `/api/teacher/students/:id/progress` | View specific student's progress |
+| POST | `/api/teacher/assign` | Assign quiz to students |
+
+### Gamification APIs
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/gamification/leaderboard` | Get top students by points |
+| GET | `/api/gamification/badges` | Get student's badges |
+
+---
+
+## 6. Tech Stack Summary
+
+```mermaid
+graph LR
+    subgraph Frontend
+        React["React 18"]
+        Vite["Vite"]
+        TW["Tailwind CSS"]
+        RC["Recharts"]
+    end
+
+    subgraph Backend
+        Node["Node.js"]
+        Express["Express.js"]
+        JWT["jsonwebtoken"]
+        Mongoose["Mongoose ODM"]
+    end
+
+    subgraph AI
+        Gemini["Google Gemini API"]
+        Rules["Rule Engine"]
+    end
+
+    subgraph Database
+        Mongo["MongoDB Atlas"]
+    end
+
+    subgraph Deploy
+        Vercel["Vercel (FE)"]
+        Render["Render (BE)"]
+    end
+
+    Frontend --> Backend
+    Backend --> AI
+    Backend --> Database
+    Frontend --> Vercel
+    Backend --> Render
+```
+
+---
+
+## 7. 8-Hour Build Timeline
+
+| Hour | Task | Deliverable |
+|------|------|-------------|
+| **0-1** | Setup + Auth | Project scaffold, MongoDB, JWT auth, login/register |
+| **1-2** | Quiz Engine | Quiz model, CRUD APIs, quiz player UI |
+| **2-3** | AI Engine | Rule-based scoring, Gemini integration, recommendations API |
+| **3-4** | Student Dashboard | Progress charts, analytics, recommendations display |
+| **4-5** | Teacher Dashboard | Student list, progress viewer, quiz assignment |
+| **5-6** | Gamification | Points system, badges, leaderboard |
+| **6-7** | UI Polish | Animations, responsive design, dark mode |
+| **7-8** | Deploy + Demo | Vercel + Render deploy, seed data, demo prep |
+
+---
+
+## 8. Key Risks & Mitigations
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Gemini API rate limits | AI features break | Cache responses; fallback to static tips |
+| Time overrun on AI engine | No core feature | Build rules first (30 min), add LLM later |
+| MongoDB Atlas connectivity | App unusable | Use local MongoDB as fallback |
+| Auth bugs | Can't login | Test auth first before building features |
+
+---
+
+## 9. Validation Checklist
+
+- [x] Requirements clearly understood (from problem statement)
+- [x] Constraints identified (8-hour timeline, hackathon)
+- [x] Each decision has trade-off analysis (ADR section)
+- [x] Simpler alternatives considered (monolith over microservices)
+- [x] ADRs written for significant decisions
+- [x] Team expertise matches chosen patterns (standard MERN stack)

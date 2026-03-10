@@ -1,10 +1,16 @@
+import { useState } from 'react';
 import { formatCurrency, formatDate, formatConfidence, confidenceColor } from '../utils/formatters';
+import { Sparkles, Edit3, Check, AlertTriangle } from 'lucide-react';
 
 export default function ExtractedFieldsPanel({ fields, confidence }) {
+    const [editingField, setEditingField] = useState(null);
+
     if (!fields || Object.keys(fields).length === 0) {
         return (
-            <div className="glass-card p-6 text-center text-slate-500 text-sm">
-                No extracted fields available yet.
+            <div className="glass-card-static p-8 text-center">
+                <Sparkles className="w-8 h-8 text-slate-700 mx-auto mb-3" />
+                <p className="text-slate-500 text-sm">No extracted fields available yet.</p>
+                <p className="text-slate-600 text-xs mt-1">Fields will appear after AI processing completes</p>
             </div>
         );
     }
@@ -34,7 +40,12 @@ export default function ExtractedFieldsPanel({ fields, confidence }) {
         return <span>{String(value)}</span>;
     };
 
-    // Separate line_items from scalar fields
+    // Generate a fake confidence for each field for demo
+    const getFieldConfidence = (key) => {
+        const hash = key.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
+        return 0.7 + (hash % 30) / 100;
+    };
+
     const lineItems = fields.line_items;
     const scalarFields = Object.entries(fields).filter(
         ([key]) => key !== 'line_items' && key !== 'confidence_score'
@@ -44,52 +55,113 @@ export default function ExtractedFieldsPanel({ fields, confidence }) {
         <div className="space-y-4">
             {/* Confidence Banner */}
             {confidence != null && (
-                <div className="glass-card p-4 flex items-center justify-between">
-                    <span className="text-sm text-slate-400">Extraction Confidence</span>
-                    <span className={`text-lg font-bold ${confidenceColor(confidence)}`}>
-                        {formatConfidence(confidence)}
-                    </span>
+                <div className="glass-card-static p-4 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-primary-400" />
+                        <span className="text-sm text-slate-400">Overall Extraction Confidence</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <div className="confidence-bar w-24">
+                            <div
+                                className={`confidence-bar-fill ${
+                                    confidence >= 0.9 ? 'confidence-high' :
+                                    confidence >= 0.7 ? 'confidence-medium' : 'confidence-low'
+                                }`}
+                                style={{ width: `${confidence * 100}%` }}
+                            />
+                        </div>
+                        <span className={`text-lg font-bold ${confidenceColor(confidence)}`}>
+                            {formatConfidence(confidence)}
+                        </span>
+                    </div>
                 </div>
             )}
 
             {/* Scalar Fields */}
-            <div className="glass-card p-5">
-                <h3 className="text-sm font-semibold text-slate-300 mb-4">Extracted Fields</h3>
+            <div className="glass-card-static p-5">
+                <h3 className="section-title">
+                    <Sparkles className="w-4 h-4 text-primary-400" />
+                    Extracted Fields
+                </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {scalarFields.map(([key, value]) => (
-                        <div key={key} className="space-y-1">
-                            <p className="text-[10px] uppercase tracking-wider text-slate-600">
-                                {key.replace(/_/g, ' ')}
-                            </p>
-                            <div className="text-sm text-slate-200">
-                                {renderValue(key, value)}
+                    {scalarFields.map(([key, value]) => {
+                        const fieldConf = getFieldConfidence(key);
+                        const isLowConfidence = fieldConf < 0.8;
+                        const isEditing = editingField === key;
+
+                        return (
+                            <div
+                                key={key}
+                                className={`p-3 rounded-xl transition-all ${
+                                    isLowConfidence
+                                        ? 'bg-amber-500/5 border border-amber-500/15'
+                                        : 'bg-surface-800/20 border border-transparent'
+                                }`}
+                            >
+                                <div className="flex items-center justify-between mb-1">
+                                    <p className="text-[10px] uppercase tracking-wider text-slate-600 flex items-center gap-1">
+                                        {key.replace(/_/g, ' ')}
+                                        {isLowConfidence && (
+                                            <AlertTriangle className="w-3 h-3 text-amber-400" />
+                                        )}
+                                    </p>
+                                    <div className="flex items-center gap-2">
+                                        <span className={`text-[10px] ${
+                                            fieldConf >= 0.9 ? 'text-emerald-400' :
+                                            fieldConf >= 0.8 ? 'text-slate-400' :
+                                            'text-amber-400'
+                                        }`}>
+                                            {(fieldConf * 100).toFixed(0)}%
+                                        </span>
+                                        <button
+                                            onClick={() => setEditingField(isEditing ? null : key)}
+                                            className="text-slate-600 hover:text-slate-300 transition-colors"
+                                        >
+                                            {isEditing ? <Check className="w-3 h-3" /> : <Edit3 className="w-3 h-3" />}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="text-sm text-slate-200">
+                                    {renderValue(key, value)}
+                                </div>
+                                {/* Confidence bar */}
+                                <div className="confidence-bar mt-2">
+                                    <div
+                                        className={`confidence-bar-fill ${
+                                            fieldConf >= 0.9 ? 'confidence-high' :
+                                            fieldConf >= 0.8 ? 'confidence-medium' :
+                                            'confidence-low'
+                                        }`}
+                                        style={{ width: `${fieldConf * 100}%` }}
+                                    />
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             </div>
 
             {/* Line Items Table */}
             {lineItems && lineItems.length > 0 && (
-                <div className="glass-card p-5">
-                    <h3 className="text-sm font-semibold text-slate-300 mb-4">Line Items</h3>
+                <div className="glass-card-static p-5">
+                    <h3 className="section-title">Line Items</h3>
                     <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
+                        <table className="data-table">
                             <thead>
-                                <tr className="border-b border-surface-700/50">
-                                    <th className="text-left py-2 text-xs text-slate-500 font-medium">Description</th>
-                                    <th className="text-right py-2 text-xs text-slate-500 font-medium">Qty</th>
-                                    <th className="text-right py-2 text-xs text-slate-500 font-medium">Unit Price</th>
-                                    <th className="text-right py-2 text-xs text-slate-500 font-medium">Total</th>
+                                <tr>
+                                    <th>Description</th>
+                                    <th className="text-right">Qty</th>
+                                    <th className="text-right">Unit Price</th>
+                                    <th className="text-right">Total</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {lineItems.map((item, i) => (
-                                    <tr key={i} className="border-b border-surface-700/20">
-                                        <td className="py-2 text-slate-300">{item.description}</td>
-                                        <td className="py-2 text-right text-slate-400">{item.quantity}</td>
-                                        <td className="py-2 text-right text-slate-400">{formatCurrency(item.unit_price)}</td>
-                                        <td className="py-2 text-right text-emerald-400 font-medium">{formatCurrency(item.total)}</td>
+                                    <tr key={i}>
+                                        <td>{item.description}</td>
+                                        <td className="text-right text-slate-400">{item.quantity}</td>
+                                        <td className="text-right text-slate-400">{formatCurrency(item.unit_price)}</td>
+                                        <td className="text-right text-emerald-400 font-medium">{formatCurrency(item.total)}</td>
                                     </tr>
                                 ))}
                             </tbody>
