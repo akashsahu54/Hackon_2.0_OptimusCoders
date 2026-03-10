@@ -23,6 +23,10 @@ uploads/
 .DS_Store
 Thumbs.db
 
+# Logs
+backend_log.txt
+*.log
+
 # Alembic
 alembic/versions/*.py
 !alembic/versions/.gitkeep

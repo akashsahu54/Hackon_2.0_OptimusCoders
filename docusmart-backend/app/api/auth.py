@@ -20,9 +20,9 @@ def _user_doc_to_response(user: dict) -> UserResponse:
         email=user["email"],
         full_name=user.get("full_name"),
         role=user.get("role", "user"),
-        is_active=user.get("is_active", True),
+        organization_id=user.get("organization_id"),
         created_at=user.get("created_at"),
-        last_login_at=user.get("last_login_at"),
+        is_active=user.get("is_active", True),
     )
 
 
