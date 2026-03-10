@@ -1,19 +1,19 @@
-"""FastAPI dependency injection — current user extraction from JWT."""
+"""FastAPI dependency injection — current user extraction from JWT (MongoDB)."""
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import Session
+from pymongo.database import Database
+
 from app.database import get_db
 from app.core.auth import decode_token
-from app.models.user import User
 
 security = HTTPBearer()
 
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db),
-) -> User:
+    db: Database = Depends(get_db),
+) -> dict:
     """Extract and validate current user from Bearer token."""
     token = credentials.credentials
     payload = decode_token(token)
@@ -31,8 +31,8 @@ def get_current_user(
             detail="Token missing subject",
         )
 
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None or not user.is_active:
+    user = db.users.find_one({"_id": user_id})
+    if user is None or not user.get("is_active", True):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found or inactive",
@@ -41,9 +41,9 @@ def get_current_user(
     return user
 
 
-def require_admin(current_user: User = Depends(get_current_user)) -> User:
+def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
     """Require the current user to have admin role."""
-    if current_user.role != "admin":
+    if current_user.get("role") != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",

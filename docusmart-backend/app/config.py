@@ -10,8 +10,9 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 
-    # ─── Database ───
-    DATABASE_URL: str = "postgresql://docusmart:docusmart@localhost:5432/docusmart"
+    # ─── MongoDB ───
+    MONGODB_URL: str = "mongodb://localhost:27017"
+    MONGODB_DB_NAME: str = "docusmart"
 
     # ─── JWT ───
     SECRET_KEY: str = "your-super-secret-jwt-key-change-in-production"
@@ -22,6 +23,7 @@ class Settings(BaseSettings):
     OCR_ENGINE: str = "tesseract"  # "tesseract" or "google_vision"
     TESSERACT_CMD: str = "tesseract"
     GOOGLE_VISION_CREDENTIALS: str = ""
+    GOOGLE_VISION_API_KEY: str = ""
 
     # ─── AI ───
     AI_PROVIDER: str = "anthropic"  # "anthropic" or "openai"

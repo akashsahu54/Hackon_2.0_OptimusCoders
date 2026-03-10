@@ -1,29 +1,19 @@
-"""DocuSmart AI — FastAPI Application Entry Point."""
+"""DocuSmart AI — FastAPI Application Entry Point (MongoDB)."""
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 
 from app.config import settings
-from app.database import engine, Base
 from app.core.exceptions import (
     DocumentNotFoundError, OCRProcessingError, ExtractionError,
     document_not_found_handler, ocr_processing_error_handler, extraction_error_handler,
 )
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Create database tables on startup."""
-    Base.metadata.create_all(bind=engine)
-    yield
-
-
 app = FastAPI(
     title=settings.APP_NAME,
     description="Smart Document Management System — OCR + AI + Automated Workflows",
     version="1.0.0",
-    lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
 )

@@ -1,4 +1,4 @@
-"""Document API routes — upload, list, detail, update, delete, reprocess."""
+"""Document API routes — upload, list, detail, update, delete, reprocess (MongoDB)."""
 
 import os
 import uuid
@@ -7,12 +7,11 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks
-from sqlalchemy.orm import Session
+from pymongo.database import Database
+from pymongo import MongoClient
 
 from app.database import get_db
 from app.config import settings
-from app.models.user import User
-from app.models.document import Document
 from app.schemas.document import (
     DocumentSummary, DocumentDetail, DocumentListResponse,
     DocumentStatusResponse, DocumentUpdate, ExtractRequest,
@@ -32,65 +31,108 @@ ALLOWED_MIME_TYPES = {
 }
 
 
-def process_document_pipeline(document_id: str, db_url: str):
+def _doc_to_summary(doc: dict) -> DocumentSummary:
+    """Convert MongoDB document dict to DocumentSummary schema."""
+    return DocumentSummary(
+        id=doc["_id"],
+        original_filename=doc["original_filename"],
+        mime_type=doc.get("mime_type"),
+        file_size_bytes=doc.get("file_size_bytes"),
+        status=doc.get("status", "uploaded"),
+        document_type=doc.get("document_type"),
+        classification_confidence=doc.get("classification_confidence"),
+        tags=doc.get("tags", []),
+        folder_path=doc.get("folder_path"),
+        created_at=doc.get("created_at"),
+        updated_at=doc.get("updated_at"),
+    )
+
+
+def _doc_to_detail(doc: dict) -> DocumentDetail:
+    """Convert MongoDB document dict to DocumentDetail schema."""
+    return DocumentDetail(
+        id=doc["_id"],
+        original_filename=doc["original_filename"],
+        file_path=doc.get("file_path"),
+        mime_type=doc.get("mime_type"),
+        file_size_bytes=doc.get("file_size_bytes"),
+        page_count=doc.get("page_count", 1),
+        status=doc.get("status", "uploaded"),
+        document_type=doc.get("document_type"),
+        classification_confidence=doc.get("classification_confidence"),
+        ocr_text=doc.get("ocr_text"),
+        ocr_confidence=doc.get("ocr_confidence"),
+        extracted_fields=doc.get("extracted_fields"),
+        extraction_confidence=doc.get("extraction_confidence"),
+        tags=doc.get("tags", []),
+        folder_path=doc.get("folder_path"),
+        is_duplicate=doc.get("is_duplicate", False),
+        duplicate_of_id=doc.get("duplicate_of_id"),
+        processing_time_ms=doc.get("processing_time_ms"),
+        created_at=doc.get("created_at"),
+        updated_at=doc.get("updated_at"),
+        processed_at=doc.get("processed_at"),
+    )
+
+
+def process_document_pipeline(document_id: str, mongodb_url: str, db_name: str):
     """Background task: run OCR → classification → extraction pipeline."""
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import Session as DBSession
+    client = MongoClient(mongodb_url)
+    db = client[db_name]
 
-    engine = create_engine(db_url)
-    with DBSession(engine) as db:
-        doc = db.query(Document).filter(Document.id == document_id).first()
-        if not doc:
-            return
+    doc = db.documents.find_one({"_id": document_id})
+    if not doc:
+        return
 
-        start_time = time.time()
+    start_time = time.time()
 
-        try:
-            # Step 1: OCR
-            doc.status = "ocr_processing"
-            db.commit()
+    try:
+        # Step 1: OCR
+        db.documents.update_one({"_id": document_id}, {"$set": {"status": "ocr_processing"}})
 
-            ocr_result = run_ocr_pipeline(doc.file_path, doc.mime_type)
-            doc.ocr_text = ocr_result["text"]
-            doc.ocr_confidence = ocr_result["confidence"]
-            db.commit()
+        ocr_result = run_ocr_pipeline(doc["file_path"], doc.get("mime_type"))
+        db.documents.update_one({"_id": document_id}, {"$set": {
+            "ocr_text": ocr_result["text"],
+            "ocr_confidence": ocr_result["confidence"],
+        }})
 
-            # Step 2: Classification
-            doc.status = "classifying"
-            db.commit()
+        # Step 2: Classification
+        db.documents.update_one({"_id": document_id}, {"$set": {"status": "classifying"}})
 
-            classification = classify_document(doc.ocr_text)
-            doc.document_type = classification["type"]
-            doc.classification_confidence = classification["confidence"]
-            db.commit()
+        classification = classify_document(ocr_result["text"])
+        db.documents.update_one({"_id": document_id}, {"$set": {
+            "document_type": classification["type"],
+            "classification_confidence": classification["confidence"],
+        }})
 
-            # Step 3: AI Extraction
-            doc.status = "extracting"
-            db.commit()
+        # Step 3: AI Extraction
+        db.documents.update_one({"_id": document_id}, {"$set": {"status": "extracting"}})
 
-            extraction = extract_fields(doc.ocr_text, doc.document_type)
-            doc.extracted_fields = extraction["fields"]
-            doc.extraction_confidence = extraction["confidence"]
+        extraction = extract_fields(ocr_result["text"], classification["type"])
+        db.documents.update_one({"_id": document_id}, {"$set": {
+            "extracted_fields": extraction["fields"],
+            "extraction_confidence": extraction["confidence"],
+            "status": "completed",
+            "processed_at": datetime.utcnow(),
+            "processing_time_ms": int((time.time() - start_time) * 1000),
+        }})
 
-            # Done
-            doc.status = "completed"
-            doc.processed_at = datetime.utcnow()
-            doc.processing_time_ms = int((time.time() - start_time) * 1000)
-            db.commit()
-
-        except Exception as e:
-            doc.status = "failed"
-            doc.processing_time_ms = int((time.time() - start_time) * 1000)
-            db.commit()
-            print(f"Pipeline error for {document_id}: {e}")
+    except Exception as e:
+        db.documents.update_one({"_id": document_id}, {"$set": {
+            "status": "failed",
+            "processing_time_ms": int((time.time() - start_time) * 1000),
+        }})
+        print(f"Pipeline error for {document_id}: {e}")
+    finally:
+        client.close()
 
 
 @router.post("/upload", response_model=DocumentSummary, status_code=201)
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Upload a document and trigger async processing pipeline."""
     # Validate file type
@@ -103,7 +145,8 @@ async def upload_document(
         raise HTTPException(status_code=400, detail=f"File too large (max {settings.MAX_FILE_SIZE_MB}MB)")
 
     # Save file to disk
-    upload_dir = os.path.join(settings.UPLOAD_DIR, str(current_user.id))
+    user_id = current_user["_id"]
+    upload_dir = os.path.join(settings.UPLOAD_DIR, user_id)
     os.makedirs(upload_dir, exist_ok=True)
 
     file_ext = os.path.splitext(file.filename)[1]
@@ -114,22 +157,28 @@ async def upload_document(
         f.write(contents)
 
     # Create document record
-    doc = Document(
-        user_id=current_user.id,
-        original_filename=file.filename,
-        file_path=file_path,
-        file_size_bytes=len(contents),
-        mime_type=file.content_type,
-        status="uploaded",
-    )
-    db.add(doc)
-    db.commit()
-    db.refresh(doc)
+    doc_id = str(uuid.uuid4())
+    now = datetime.utcnow()
+    doc = {
+        "_id": doc_id,
+        "user_id": user_id,
+        "original_filename": file.filename,
+        "file_path": file_path,
+        "file_size_bytes": len(contents),
+        "mime_type": file.content_type,
+        "page_count": 1,
+        "status": "uploaded",
+        "tags": [],
+        "is_duplicate": False,
+        "created_at": now,
+        "updated_at": now,
+    }
+    db.documents.insert_one(doc)
 
     # Queue background processing
-    background_tasks.add_task(process_document_pipeline, str(doc.id), settings.DATABASE_URL)
+    background_tasks.add_task(process_document_pipeline, doc_id, settings.MONGODB_URL, settings.MONGODB_DB_NAME)
 
-    return DocumentSummary.model_validate(doc)
+    return _doc_to_summary(doc)
 
 
 @router.get("", response_model=DocumentListResponse)
@@ -139,24 +188,30 @@ def list_documents(
     type: Optional[str] = None,
     status: Optional[str] = None,
     search: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """List all documents for the current user with filtering."""
-    query = db.query(Document).filter(Document.user_id == current_user.id)
+    query_filter = {"user_id": current_user["_id"]}
 
     if type:
-        query = query.filter(Document.document_type == type)
+        query_filter["document_type"] = type
     if status:
-        query = query.filter(Document.status == status)
+        query_filter["status"] = status
     if search:
-        query = query.filter(Document.ocr_text.ilike(f"%{search}%"))
+        query_filter["ocr_text"] = {"$regex": search, "$options": "i"}
 
-    total = query.count()
-    documents = query.order_by(Document.created_at.desc()).offset((page - 1) * limit).limit(limit).all()
+    total = db.documents.count_documents(query_filter)
+    skip = (page - 1) * limit
+    documents = list(
+        db.documents.find(query_filter)
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(limit)
+    )
 
     return DocumentListResponse(
-        documents=[DocumentSummary.model_validate(d) for d in documents],
+        documents=[_doc_to_summary(d) for d in documents],
         total=total,
         page=page,
         limit=limit,
@@ -165,80 +220,66 @@ def list_documents(
 
 @router.get("/{document_id}", response_model=DocumentDetail)
 def get_document(
-    document_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    document_id: str,
+    db: Database = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Get full document detail including extracted fields."""
-    doc = db.query(Document).filter(
-        Document.id == document_id,
-        Document.user_id == current_user.id,
-    ).first()
+    doc = db.documents.find_one({"_id": document_id, "user_id": current_user["_id"]})
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    return DocumentDetail.model_validate(doc)
+    return _doc_to_detail(doc)
 
 
 @router.put("/{document_id}", response_model=DocumentDetail)
 def update_document(
-    document_id: uuid.UUID,
+    document_id: str,
     data: DocumentUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Update document metadata (tags, folder, corrections)."""
-    doc = db.query(Document).filter(
-        Document.id == document_id,
-        Document.user_id == current_user.id,
-    ).first()
+    doc = db.documents.find_one({"_id": document_id, "user_id": current_user["_id"]})
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    update_fields = {"updated_at": datetime.utcnow()}
+
     if data.tags is not None:
-        doc.tags = data.tags
+        update_fields["tags"] = data.tags
     if data.folder_path is not None:
-        doc.folder_path = data.folder_path
+        update_fields["folder_path"] = data.folder_path
     if data.corrections:
-        existing = doc.extracted_fields or {}
+        existing = doc.get("extracted_fields") or {}
         existing.update(data.corrections)
-        doc.extracted_fields = existing
+        update_fields["extracted_fields"] = existing
 
-    doc.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(doc)
+    db.documents.update_one({"_id": document_id}, {"$set": update_fields})
 
-    return DocumentDetail.model_validate(doc)
+    updated_doc = db.documents.find_one({"_id": document_id})
+    return _doc_to_detail(updated_doc)
 
 
 @router.delete("/{document_id}", status_code=204)
 def delete_document(
-    document_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    document_id: str,
+    db: Database = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Delete a document (soft delete)."""
-    doc = db.query(Document).filter(
-        Document.id == document_id,
-        Document.user_id == current_user.id,
-    ).first()
-    if not doc:
+    """Delete a document."""
+    result = db.documents.delete_one({"_id": document_id, "user_id": current_user["_id"]})
+    if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Document not found")
-
-    db.delete(doc)
-    db.commit()
 
 
 @router.get("/{document_id}/status", response_model=DocumentStatusResponse)
 def get_document_status(
-    document_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    document_id: str,
+    db: Database = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Poll processing status of a document."""
-    doc = db.query(Document).filter(
-        Document.id == document_id,
-        Document.user_id == current_user.id,
-    ).first()
+    doc = db.documents.find_one({"_id": document_id, "user_id": current_user["_id"]})
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -252,81 +293,73 @@ def get_document_status(
     }
 
     return DocumentStatusResponse(
-        status=doc.status,
-        progress_percent=progress_map.get(doc.status, 0),
-        current_step=doc.status,
+        status=doc.get("status", "uploaded"),
+        progress_percent=progress_map.get(doc.get("status"), 0),
+        current_step=doc.get("status", "uploaded"),
     )
 
 
 @router.post("/{document_id}/reprocess", response_model=DocumentStatusResponse)
 def reprocess_document(
-    document_id: uuid.UUID,
+    document_id: str,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Re-run OCR and extraction pipeline on existing document."""
-    doc = db.query(Document).filter(
-        Document.id == document_id,
-        Document.user_id == current_user.id,
-    ).first()
+    doc = db.documents.find_one({"_id": document_id, "user_id": current_user["_id"]})
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    doc.status = "uploaded"
-    doc.ocr_text = None
-    doc.extracted_fields = None
-    db.commit()
+    db.documents.update_one({"_id": document_id}, {"$set": {
+        "status": "uploaded",
+        "ocr_text": None,
+        "extracted_fields": None,
+    }})
 
-    background_tasks.add_task(process_document_pipeline, str(doc.id), settings.DATABASE_URL)
+    background_tasks.add_task(process_document_pipeline, document_id, settings.MONGODB_URL, settings.MONGODB_DB_NAME)
 
     return DocumentStatusResponse(status="uploaded", progress_percent=10, current_step="queued")
 
 
 @router.get("/{document_id}/fields")
 def get_extracted_fields(
-    document_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    document_id: str,
+    db: Database = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Get extracted fields as flat JSON."""
-    doc = db.query(Document).filter(
-        Document.id == document_id,
-        Document.user_id == current_user.id,
-    ).first()
+    doc = db.documents.find_one({"_id": document_id, "user_id": current_user["_id"]})
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    return doc.extracted_fields or {}
+    return doc.get("extracted_fields") or {}
 
 
 @router.put("/{document_id}/fields")
 def correct_fields(
-    document_id: uuid.UUID,
+    document_id: str,
     data: FieldCorrection,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Manually correct extracted fields (audit-safe)."""
-    doc = db.query(Document).filter(
-        Document.id == document_id,
-        Document.user_id == current_user.id,
-    ).first()
+    doc = db.documents.find_one({"_id": document_id, "user_id": current_user["_id"]})
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    existing = doc.extracted_fields or {}
+    existing = doc.get("extracted_fields") or {}
     existing.update(data.corrections)
-    doc.extracted_fields = existing
-    doc.updated_at = datetime.utcnow()
-    db.commit()
-
-    return doc.extracted_fields
+    db.documents.update_one({"_id": document_id}, {"$set": {
+        "extracted_fields": existing,
+        "updated_at": datetime.utcnow(),
+    }})
+    return existing
 
 
 @router.post("/extract", response_model=ExtractionResponse)
 def extract_from_text(
     data: ExtractRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     """Extract structured data from raw text (no file upload)."""
     result = extract_fields(data.text, data.document_type)
@@ -340,7 +373,7 @@ def extract_from_text(
 @router.post("/classify", response_model=ClassificationResponse)
 def classify_text(
     data: ClassifyRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     """Classify document type from raw text."""
     result = classify_document(data.text)
